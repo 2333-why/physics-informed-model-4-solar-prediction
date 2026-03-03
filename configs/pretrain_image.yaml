@@ -1,0 +1,37 @@
+seed: 42
+device: "npu"   # npu | cuda | cpu | auto
+
+dataset:
+  train_csv: "data/folsom/train.csv"
+  val_csv: "data/folsom/val.csv"
+  image_root: "data/folsom/images"
+  timestamp_col: "timestamp"
+  image_col: "image_path"
+  target_col: "ghi"
+  weather_cols: ["air_temperature", "relative_humidity", "wind_speed"]
+
+  # Folsom location (update if your station differs)
+  latitude: 38.679
+  longitude: -121.176
+  timezone: "US/Pacific"
+  altitude: 56.0
+
+  seq_len: 8
+  stride: 1
+  image_size: 224
+
+model:
+  cloud_dim: 4
+  feat_dim: 128
+  hidden_dim: 128
+
+train:
+  epochs: 30
+  batch_size: 8
+  lr: 0.001
+  weight_decay: 0.0001
+  num_workers: 4
+  pin_memory: true
+  amp: true
+  lambda_smooth: 0.05
+  out_dir: "outputs/pretrain_image"
