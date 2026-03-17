@@ -1,0 +1,15 @@
+Looking in indexes: https://pypi.tuna.tsinghua.edu.cn/simple
+Collecting pandas
+  Using cached https://pypi.tuna.tsinghua.edu.cn/packages/1d/03/3fc4a529a7710f890a239cc496fc6d50ad4a0995657dccc1d64695adb9f4/pandas-2.3.3-cp310-cp310-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl (12.1 MB)
+Requirement already satisfied: numpy>=1.22.4 in /home/why/miniconda3/envs/npu_why/lib/python3.10/site-packages (from pandas) (2.2.6)
+Collecting python-dateutil>=2.8.2 (from pandas)
+  Using cached https://pypi.tuna.tsinghua.edu.cn/packages/ec/57/56b9bcc3c9c6a792fcbaf139543cee77261f3651ca9da0c93f5c1221264b/python_dateutil-2.9.0.post0-py2.py3-none-any.whl (229 kB)
+Collecting pytz>=2020.1 (from pandas)
+  Using cached https://pypi.tuna.tsinghua.edu.cn/packages/10/99/781fe0c827be2742bcc775efefccb3b048a3a9c6ce9aec0cbf4a101677e5/pytz-2026.1.post1-py2.py3-none-any.whl (510 kB)
+Collecting tzdata>=2022.7 (from pandas)
+  Using cached https://pypi.tuna.tsinghua.edu.cn/packages/c7/b0/003792df09decd6849a5e39c28b513c06e84436a54440380862b5aeff25d/tzdata-2025.3-py2.py3-none-any.whl (348 kB)
+Collecting six>=1.5 (from python-dateutil>=2.8.2->pandas)
+  Using cached https://pypi.tuna.tsinghua.edu.cn/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl (11 kB)
+Installing collected packages: pytz, tzdata, six, python-dateutil, pandas
+
+Successfully installed pandas-2.3.3 python-dateutil-2.9.0.post0 pytz-2026.1.post1 six-1.17.0 tzdata-2025.3

@@ -11,7 +11,13 @@ from tqdm import tqdm
 from folsom_pretrain.data import DatasetSpec, FolsomImageSequenceDataset, collate_fn
 from folsom_pretrain.losses import physics_loss
 from folsom_pretrain.models import CloudPhysicsFinalModel
-from folsom_pretrain.utils import get_amp_helper, get_device, is_npu_device, seed_everything, should_pin_memory
+from folsom_pretrain.utils import (
+    get_amp_helper,
+    get_device,
+    is_npu_device,
+    seed_everything,
+    should_pin_memory,
+)
 
 
 def load_cfg(path: str) -> dict:
@@ -19,13 +25,7 @@ def load_cfg(path: str) -> dict:
         return yaml.safe_load(f)
 
 
-def build_dataset(cfg: dict) -> tuple[
-    FolsomImageSequenceDataset,
-    FolsomImageSequenceDataset,
-    FolsomImageSequenceDataset,
-    FolsomImageSequenceDataset,
-    FolsomImageSequenceDataset,
-]:
+def build_clear_datasets(cfg: dict) -> tuple[FolsomImageSequenceDataset, FolsomImageSequenceDataset]:
     dcfg = cfg["dataset"]
     common = dict(
         irradiance_csv=dcfg["irradiance_csv"],
@@ -58,19 +58,11 @@ def build_dataset(cfg: dict) -> tuple[
         stability_dhi_1min=dcfg.get("stability_dhi_1min", 60.0),
         stability_dni_5min=dcfg.get("stability_dni_5min", 200.0),
         stability_dhi_5min=dcfg.get("stability_dhi_5min", 100.0),
+        clear_only=True,
     )
     train_spec = DatasetSpec(**common, split="train")
     val_spec = DatasetSpec(**common, split="val")
-    test_spec = DatasetSpec(**common, split="test")
-    clear_train_spec = DatasetSpec(**common, split="train", clear_only=True)
-    clear_val_spec = DatasetSpec(**common, split="val", clear_only=True)
-    return (
-        FolsomImageSequenceDataset(train_spec),
-        FolsomImageSequenceDataset(val_spec),
-        FolsomImageSequenceDataset(test_spec),
-        FolsomImageSequenceDataset(clear_train_spec),
-        FolsomImageSequenceDataset(clear_val_spec),
-    )
+    return FolsomImageSequenceDataset(train_spec), FolsomImageSequenceDataset(val_spec)
 
 
 def build_loader(dataset: FolsomImageSequenceDataset, cfg: dict, device: torch.device, shuffle: bool) -> DataLoader:
@@ -87,21 +79,12 @@ def build_loader(dataset: FolsomImageSequenceDataset, cfg: dict, device: torch.d
     )
 
 
-def _select_stage(epoch: int, stage1_epochs: int, stage2_epochs: int) -> int:
-    if epoch <= stage1_epochs:
-        return 1
-    if epoch <= stage1_epochs + stage2_epochs:
-        return 2
-    return 3
-
-
 def run_epoch(
     model: CloudPhysicsFinalModel,
     loader: DataLoader,
     optimizer: torch.optim.Optimizer | None,
     amp,
     device: torch.device,
-    stage: int,
     loss_cfg: dict,
 ) -> dict[str, float]:
     is_train = optimizer is not None
@@ -118,7 +101,7 @@ def run_epoch(
         target_rad = batch["target_rad"].to(device, non_blocking=True)
         clear_mask = batch["clear_mask"].to(device, non_blocking=True)
 
-        if stage == 1 and clear_mask.sum().item() <= 0:
+        if clear_mask.sum().item() <= 0:
             continue
 
         if is_train:
@@ -130,7 +113,7 @@ def run_epoch(
                 out=out,
                 target_rad=target_rad,
                 clear_mask=clear_mask,
-                stage=stage,
+                stage=1,
                 cfg=loss_cfg,
             )
 
@@ -146,7 +129,7 @@ def run_epoch(
         n_batches += 1
         for k, v in loss_items.items():
             meters[k] = meters.get(k, 0.0) + float(v)
-        pbar.set_postfix({"loss": f"{loss_items['loss_total']:.4f}", "stage": stage})
+        pbar.set_postfix({"loss": f"{loss_items['loss_total']:.4f}", "stage": 1})
 
     if n_batches == 0:
         return {"loss_total": 0.0}
@@ -154,8 +137,10 @@ def run_epoch(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Final physics-informed training (pvlib + FARMS residual)")
+    parser = argparse.ArgumentParser(description="Stage-1 clear-sky pretraining (AOD/residual heads only)")
     parser.add_argument("--config", type=str, required=True)
+    parser.add_argument("--epochs", type=int, default=None)
+    parser.add_argument("--out_dir", type=str, default=None)
     args = parser.parse_args()
 
     cfg = load_cfg(args.config)
@@ -166,12 +151,9 @@ def main() -> None:
         raise RuntimeError(f"This training entrypoint is configured for Ascend NPU only, but got {device}.")
     print(f"Using device: {device}")
 
-    train_ds, val_ds, test_ds, clear_train_ds, clear_val_ds = build_dataset(cfg)
+    train_ds, val_ds = build_clear_datasets(cfg)
     train_loader = build_loader(train_ds, cfg, device, shuffle=True)
     val_loader = build_loader(val_ds, cfg, device, shuffle=False)
-    test_loader = build_loader(test_ds, cfg, device, shuffle=False)
-    clear_train_loader = build_loader(clear_train_ds, cfg, device, shuffle=True)
-    clear_val_loader = build_loader(clear_val_ds, cfg, device, shuffle=False)
 
     model = CloudPhysicsFinalModel(
         weather_dim=7,
@@ -179,6 +161,7 @@ def main() -> None:
         hidden_dim=cfg["model"].get("hidden_dim", 128),
         rs=cfg["model"].get("rs", 0.2),
     ).to(device)
+    model.freeze_stage1()
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -187,65 +170,33 @@ def main() -> None:
     )
 
     amp = get_amp_helper(device, enabled=cfg["train"].get("amp", True))
-    if amp.scaler is not None and any(p.dtype == torch.float16 for p in model.parameters()):
-        print("Detected fp16 parameters in model. Disabling GradScaler to avoid unscale FP16 gradients on NPU.")
-        amp.scaler = None
-    epochs = cfg["train"].get("epochs", 30)
-    stage1_epochs = cfg["train"].get("stage1_epochs", 5)
-    stage2_epochs = cfg["train"].get("stage2_epochs", 20)
-
+    epochs = args.epochs or cfg["train"].get("stage1_epochs", 5)
     loss_cfg = cfg["loss"]
-    out_dir = Path(cfg["train"].get("out_dir", "outputs/final_pvlib_farms"))
+    out_dir = Path(args.out_dir or cfg["train"].get("out_dir", "outputs/final_pvlib_farms"))
     out_dir.mkdir(parents=True, exist_ok=True)
 
     best_val = float("inf")
     for epoch in range(1, epochs + 1):
-        stage = _select_stage(epoch, stage1_epochs, stage2_epochs)
-        if stage == 1:
-            model.freeze_stage1()
-        else:
-            model.unfreeze_all()
-
-        run_loss_cfg = dict(loss_cfg)
-        if stage == 3:
-            run_loss_cfg["lambda_split"] = 1.5 * run_loss_cfg["lambda_split"]
-            run_loss_cfg["lambda_id"] = 1.5 * run_loss_cfg["lambda_id"]
-            run_loss_cfg["lambda_delta"] = 2.0 * run_loss_cfg["lambda_delta"]
-
-        if stage == 1:
-            train_m = run_epoch(model, clear_train_loader, optimizer, amp, device, stage, run_loss_cfg)
-            val_m = run_epoch(model, clear_val_loader, None, amp, device, stage, run_loss_cfg)
-        else:
-            train_m = run_epoch(model, train_loader, optimizer, amp, device, stage, run_loss_cfg)
-            val_m = run_epoch(model, val_loader, None, amp, device, stage, run_loss_cfg)
+        train_m = run_epoch(model, train_loader, optimizer, amp, device, loss_cfg)
+        val_m = run_epoch(model, val_loader, None, amp, device, loss_cfg)
         print(
-            f"Epoch {epoch:03d} (stage {stage}) | "
+            f"Epoch {epoch:03d} (stage 1) | "
             f"train={train_m['loss_total']:.4f} val={val_m['loss_total']:.4f} "
-            f"val_rad={val_m.get('loss_rad', 0.0):.4f} val_clr={val_m.get('loss_clr', 0.0):.4f}"
+            f"val_clr={val_m.get('loss_clr', 0.0):.4f}"
         )
 
         ckpt = {
             "epoch": epoch,
-            "stage": stage,
+            "stage": 1,
             "model": model.state_dict(),
             "optimizer": optimizer.state_dict(),
             "val_loss": val_m["loss_total"],
             "config": cfg,
         }
-        torch.save(ckpt, out_dir / "last.pt")
+        torch.save(ckpt, out_dir / "stage1_last.pt")
         if val_m["loss_total"] < best_val:
             best_val = val_m["loss_total"]
-            torch.save(ckpt, out_dir / "best.pt")
-
-    best_ckpt = torch.load(out_dir / "best.pt", map_location="cpu")
-    model.load_state_dict(best_ckpt["model"], strict=True)
-    model.to(device)
-    model.unfreeze_all()
-    final_test = run_epoch(model, test_loader, None, amp, device, stage=3, loss_cfg=loss_cfg)
-    print(
-        f"Best@val epoch={best_ckpt['epoch']} | Final test loss={final_test['loss_total']:.4f} "
-        f"test_rad={final_test.get('loss_rad', 0.0):.4f}"
-    )
+            torch.save(ckpt, out_dir / "stage1_best.pt")
 
 
 if __name__ == "__main__":

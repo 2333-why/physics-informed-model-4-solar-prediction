@@ -1,5 +1,6 @@
 torch>=2.1
 torchvision>=0.16
+# Install the Ascend-matched torch_npu wheel separately in the active NPU environment.
 pandas>=2.0
 numpy>=1.24
 pvlib>=0.10

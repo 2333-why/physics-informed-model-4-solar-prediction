@@ -1,37 +1,74 @@
 seed: 42
-device: "npu"   # npu | cuda | cpu | auto
+device: "npu"   # npu only
 
 dataset:
-  train_csv: "data/folsom/train.csv"
-  val_csv: "data/folsom/val.csv"
-  image_root: "data/folsom/images"
-  timestamp_col: "timestamp"
-  image_col: "image_path"
-  target_col: "ghi"
-  weather_cols: ["air_temperature", "relative_humidity", "wind_speed"]
+  irradiance_csv: "/mnt/nvme0/why/physics-informed-model-4-solar-prediction/dataset/folsom/Folsom_irradiance.csv"
+  weather_csv: "/mnt/nvme0/why/physics-informed-model-4-solar-prediction/dataset/folsom/Folsom_weather.csv"
+  image_root: "/mnt/nvme0/why/physics-informed-model-4-solar-prediction/dataset/folsom"
+  timestamp_col: "timeStamp"
 
-  # Folsom location (update if your station differs)
   latitude: 38.679
   longitude: -121.176
   timezone: "US/Pacific"
   altitude: 56.0
 
+  train_ratio: 0.8
+  val_ratio: 0.1
   seq_len: 8
-  stride: 1
+  stride: 2
   image_size: 224
 
+  min_mu0_day: 0.0
+  closure_thresh_global: 0.05
+  min_mu0_clear: 0.25
+  clear_beam_frac_thresh: 0.6
+  clear_diff_frac_thresh: 0.25
+  clear_closure_thresh: 0.05
+  clear_beam_frac_thresh_relaxed: 0.5
+  clear_diff_frac_thresh_relaxed: 0.35
+  clear_min_count: 100
+  clear_min_fraction: 0.02
+  stability_mode: "auto"
+  stability_k_1min: 10
+  stability_k_5min: 6
+  stability_dni_1min: 120.0
+  stability_dhi_1min: 60.0
+  stability_dni_5min: 200.0
+  stability_dhi_5min: 100.0
+
 model:
-  cloud_dim: 4
   feat_dim: 128
   hidden_dim: 128
+  rs: 0.2
+
+loss:
+  w_g: 0.7
+  w_n: 1.0
+  w_d: 0.7
+  scale_ghi: 1000.0
+  scale_dni: 1000.0
+  scale_dhi: 1000.0
+
+  lambda_split: 0.2
+  lambda_id: 0.1
+  lambda_dt: 0.3
+  lambda_delta: 0.001
+  lambda_base: 0.0001
+  lambda_clr: 1.0
+  lambda_f0: 0.2
+  lambda_aod: 0.5
+  lambda_smooth: 0.05
+  lambda_proxy: 0.2
 
 train:
-  epochs: 30
-  batch_size: 8
-  lr: 0.001
+  epochs: 24
+  stage1_epochs: 10
+  stage2_epochs: 14
+
+  batch_size: 24
+  lr: 0.0015
   weight_decay: 0.0001
-  num_workers: 4
-  pin_memory: true
-  amp: true
-  lambda_smooth: 0.05
-  out_dir: "outputs/pretrain_image"
+  num_workers: 8
+  pin_memory: false
+  amp: false
+  out_dir: "outputs/final_pvlib_farms"
